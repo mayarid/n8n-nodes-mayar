@@ -1,6 +1,6 @@
 {
   "name": "@mayarid/n8n-nodes-mayar",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "n8n community nodes for Mayar Headless API (actions & triggers)",
   "license": "MIT",
   "type": "commonjs",
