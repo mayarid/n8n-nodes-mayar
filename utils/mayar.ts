@@ -42,7 +42,8 @@ export async function request(
   let attempt = 0;
   while (true) {
     try {
-      const res = await (ctx as any).helpers.requestWithAuthentication('mayarApi', { method: options.method, url, json: options.json ?? true, body: options.body, qs: options.qs, headers });
+      const reqAuth = (ctx as any).helpers.requestWithAuthentication;
+      const res = await reqAuth.call(ctx, 'mayarApi', { method: options.method, url, json: options.json ?? true, body: options.body, qs: options.qs, headers });
       return res;
     } catch (error: any) {
       const statusCode = error?.statusCode ?? error?.status ?? 500;

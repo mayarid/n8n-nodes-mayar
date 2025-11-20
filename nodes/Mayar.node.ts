@@ -1,5 +1,5 @@
 import type { IExecuteFunctions, INodeExecutionData, INodeType, INodeTypeDescription } from 'n8n-workflow';
-import { NodeOperationError } from 'n8n-workflow';
+import { NodeApiError, NodeOperationError } from 'n8n-workflow';
 import { request } from '../utils/mayar';
 import { toOutput, validateRequiredString, validateEmail, validateMobile, validateOptionalISODate, validateInvoiceItems, validateNumberRange } from '../utils/validation';
 
@@ -62,6 +62,7 @@ export class Mayar implements INodeType {
         type: 'options',
         options: [
           { name: 'Create', value: 'create', action: 'Create Invoice' },
+          { name: 'Get', value: 'get', action: 'Get Invoice Detail' },
           { name: 'Get Many', value: 'getAll', action: 'Get Invoices' },
         ],
         default: 'create',
@@ -94,6 +95,8 @@ export class Mayar implements INodeType {
         ] }],
         displayOptions: { show: { resource: ['invoice'], operation: ['create'] } },
       },
+
+      { displayName: 'Invoice ID', name: 'invoiceId', type: 'string', default: '', required: true, displayOptions: { show: { resource: ['invoice'], operation: ['get'] } } },
 
       {
         displayName: 'Operation', name: 'operation', type: 'options',
@@ -153,16 +156,24 @@ export class Mayar implements INodeType {
     const operation = this.getNodeParameter('operation', 0) as string;
     const opt = this.getNodeParameter('options', 0, {}) as { continueOnFail?: boolean; maxRetries?: number; retryDelayMs?: number; debug?: boolean };
     const retryCfg = { maxRetries: opt.maxRetries ?? 0, retryDelayMs: opt.retryDelayMs ?? 500 };
+    const handle = async (fn: () => Promise<INodeExecutionData[][]>) => {
+      try {
+        return await fn();
+      } catch (error: any) {
+        if (opt.continueOnFail) return [toOutput({ error: error?.message ?? 'Request failed' })];
+        if (error?.response || error?.statusCode || error?.status) {
+          throw new NodeApiError(this.getNode(), error);
+        }
+        throw new NodeOperationError(this.getNode(), error?.message ?? 'Operation failed');
+      }
+    };
 
     if (resource === 'balance' && operation === 'get') {
-      try {
+      return handle(async () => {
         const response = await request(this, { method: 'GET', path: '/balance', retry: retryCfg });
         if (opt.debug) (response as any)._meta = { method: 'GET', path: '/balance' };
         return [toOutput(response)];
-      } catch (error: any) {
-        if (opt.continueOnFail) return [toOutput({ error: error?.message ?? 'Request failed' })];
-        throw new NodeOperationError(this.getNode(), error?.message ?? 'Request failed');
-      }
+      });
     }
 
     if (resource === 'invoice' && operation === 'create') {
@@ -175,32 +186,35 @@ export class Mayar implements INodeType {
       const itemsParam = this.getNodeParameter('items', 0, {}) as { item?: Array<{ quantity: number; rate: number; description?: string }> };
       const items = (itemsParam.item ?? []).map((i) => ({ quantity: i.quantity, rate: i.rate, description: i.description }));
 
-      try {
+      return handle(async () => {
         validateRequiredString('Name', name);
         validateEmail('Email', email);
         validateMobile('Mobile', mobile);
         validateOptionalISODate('Expired At', expiredAt);
         validateInvoiceItems(items);
-
         const body = { name, email, mobile, redirectUrl, description, expiredAt, items };
         const response = await request(this, { method: 'POST', path: '/invoice/create', body, retry: retryCfg });
         if (opt.debug) (response as any)._meta = { method: 'POST', path: '/invoice/create', body };
         return [toOutput(response)];
-      } catch (error: any) {
-        if (opt.continueOnFail) return [toOutput({ error: error?.message ?? 'Request failed' })];
-        throw new NodeOperationError(this.getNode(), error?.message ?? 'Request failed');
-      }
+      });
     }
 
     if (resource === 'invoice' && operation === 'getAll') {
-      try {
+      return handle(async () => {
         const response = await request(this, { method: 'GET', path: '/invoice', retry: retryCfg });
         if (opt.debug) (response as any)._meta = { method: 'GET', path: '/invoice' };
         return [toOutput(response)];
-      } catch (error: any) {
-        if (opt.continueOnFail) return [toOutput({ error: error?.message ?? 'Request failed' })];
-        throw new NodeOperationError(this.getNode(), error?.message ?? 'Request failed');
-      }
+      });
+    }
+
+    if (resource === 'invoice' && operation === 'get') {
+      const invoiceId = this.getNodeParameter('invoiceId', 0) as string;
+      return handle(async () => {
+        validateRequiredString('Invoice ID', invoiceId);
+        const response = await request(this, { method: 'GET', path: `/invoice/${invoiceId}`, retry: retryCfg });
+        if (opt.debug) (response as any)._meta = { method: 'GET', path: `/invoice/${invoiceId}` };
+        return [toOutput(response)];
+      });
     }
 
     if (resource === 'coupon' && operation === 'create') {
@@ -224,7 +238,7 @@ export class Mayar implements INodeType {
         coupon: { code: couponParam.value?.code, type: couponParam.value?.type },
         products,
       };
-      try {
+      return handle(async () => {
         validateRequiredString('Name', couponName);
         validateOptionalISODate('Expired At', couponExpiredAt);
         if (discountParam.value?.value != null) validateNumberRange('Discount Value', discountParam.value.value, 0.01);
@@ -232,56 +246,44 @@ export class Mayar implements INodeType {
         const response = await request(this, { method: 'POST', path: '/coupon/create', body, retry: retryCfg });
         if (opt.debug) (response as any)._meta = { method: 'POST', path: '/coupon/create', body };
         return [toOutput(response)];
-      } catch (error: any) {
-        if (opt.continueOnFail) return [toOutput({ error: error?.message ?? 'Request failed' })];
-        throw new NodeOperationError(this.getNode(), error?.message ?? 'Request failed');
-      }
+      });
     }
 
     if (resource === 'coupon' && operation === 'get') {
       const couponId = this.getNodeParameter('couponId', 0) as string;
-      try {
+      return handle(async () => {
         validateRequiredString('Coupon ID', couponId);
         const response = await request(this, { method: 'GET', path: `/coupon/${couponId}`, retry: retryCfg });
         if (opt.debug) (response as any)._meta = { method: 'GET', path: `/coupon/${couponId}` };
         return [toOutput(response)];
-      } catch (error: any) {
-        if (opt.continueOnFail) return [toOutput({ error: error?.message ?? 'Request failed' })];
-        throw new NodeOperationError(this.getNode(), error?.message ?? 'Request failed');
-      }
+      });
     }
 
     if (resource === 'coupon' && operation === 'getAll') {
-      try {
+      return handle(async () => {
         const response = await request(this, { method: 'GET', path: '/coupon', retry: retryCfg });
         if (opt.debug) (response as any)._meta = { method: 'GET', path: '/coupon' };
         return [toOutput(response)];
-      } catch (error: any) {
-        if (opt.continueOnFail) return [toOutput({ error: error?.message ?? 'Request failed' })];
-        throw new NodeOperationError(this.getNode(), error?.message ?? 'Request failed');
-      }
+      });
     }
 
     if (resource === 'customer' && operation === 'getAll') {
       const page = this.getNodeParameter('page', 0) as number;
       const pageSize = this.getNodeParameter('pageSize', 0) as number;
-      try {
+      return handle(async () => {
         validateNumberRange('Page', page, 1);
         validateNumberRange('Page Size', pageSize, 1, 100);
         const response = await request(this, { method: 'GET', path: '/customer', qs: { page, pageSize }, retry: retryCfg });
         if (opt.debug) (response as any)._meta = { method: 'GET', path: '/customer', qs: { page, pageSize } };
         return [toOutput(response)];
-      } catch (error: any) {
-        if (opt.continueOnFail) return [toOutput({ error: error?.message ?? 'Request failed' })];
-        throw new NodeOperationError(this.getNode(), error?.message ?? 'Request failed');
-      }
+      });
     }
 
     if (resource === 'customer' && operation === 'create') {
       const name = this.getNodeParameter('customerName', 0) as string;
       const email = this.getNodeParameter('customerEmail', 0) as string;
       const mobile = this.getNodeParameter('customerMobile', 0) as string;
-      try {
+      return handle(async () => {
         validateRequiredString('Name', name);
         validateEmail('Email', email);
         validateMobile('Mobile', mobile);
@@ -289,16 +291,13 @@ export class Mayar implements INodeType {
         const response = await request(this, { method: 'POST', path: '/customer/create', body, retry: retryCfg });
         if (opt.debug) (response as any)._meta = { method: 'POST', path: '/customer/create', body };
         return [toOutput(response)];
-      } catch (error: any) {
-        if (opt.continueOnFail) return [toOutput({ error: error?.message ?? 'Request failed' })];
-        throw new NodeOperationError(this.getNode(), error?.message ?? 'Request failed');
-      }
+      });
     }
 
     if (resource === 'customer' && operation === 'updateEmail') {
       const fromEmail = this.getNodeParameter('fromEmail', 0) as string;
       const toEmail = this.getNodeParameter('toEmail', 0) as string;
-      try {
+      return handle(async () => {
         validateEmail('From Email', fromEmail);
         validateEmail('To Email', toEmail);
         if (fromEmail === toEmail) throw new Error('From Email dan To Email tidak boleh sama');
@@ -306,10 +305,7 @@ export class Mayar implements INodeType {
         const response = await request(this, { method: 'POST', path: '/customer/update', body, retry: retryCfg });
         if (opt.debug) (response as any)._meta = { method: 'POST', path: '/customer/update', body };
         return [toOutput(response)];
-      } catch (error: any) {
-        if (opt.continueOnFail) return [toOutput({ error: error?.message ?? 'Request failed' })];
-        throw new NodeOperationError(this.getNode(), error?.message ?? 'Request failed');
-      }
+      });
     }
 
     return [toOutput({ message: 'No operation executed' })];
